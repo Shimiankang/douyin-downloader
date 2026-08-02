@@ -23,3 +23,9 @@ black==23.11.0           # 代码格式化
 # 其他可能需要的包
 python-dateutil>=2.8.2
 requests-toolbelt>=1.0.0
+
+# HTTP response compression
+brotli>=1.1.0
+
+# Download progress
+tqdm>=4.66.0
