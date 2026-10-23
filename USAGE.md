@@ -16,6 +16,8 @@ python cookie_extractor.py
 python get_cookies_manual.py
 ```
 
+`get_cookies_manual.py` 只检查常见 Cookie 字段，缺少 `msToken` 不等于 Cookie 无效；是否可用应以目标接口的实际响应为准。这个助手默认写入 `config_simple.yml`，而 `DouYinCommand.py` 读取的是 `config.yml`。
+
 ### 3. 开始下载
 
 #### V1.0 稳定版（推荐用于单个视频）
@@ -25,10 +27,15 @@ python get_cookies_manual.py
 python DouYinCommand.py
 ```
 
+动图／实况作品也可以按单个作品下载：把网页版链接（包括 `modal_id`）填入 `config.yml` 的 `link`，再运行上面的命令。每张实况图会保存一张静图（如 `*_image_1.webp`）和一段动态视频（`*_image_1_live.mp4`）；普通图集仍只保存静图。配置文件名是 `config.yml`。
+
 #### V2.0 增强版（推荐用于用户主页）
 ```bash
 # 下载用户主页
 python downloader.py -u "https://www.douyin.com/user/xxxxx"
+
+# 下载用户主页中打开的单个实况作品
+python downloader.py -u "https://www.douyin.com/user/xxxxx?modal_id=作品ID"
 
 # 自动获取 Cookie 并下载
 python downloader.py --auto-cookie -u "https://www.douyin.com/user/xxxxx"
@@ -54,4 +61,4 @@ python downloader.py --auto-cookie -u "https://www.douyin.com/user/xxxxx"
 ## 📞 获取帮助
 
 - 查看详细文档：`README.md`
-- 报告问题：[GitHub Issues](https://github.com/jiji262/douyin-downloader/issues) 
+- 报告问题：[GitHub Issues](https://github.com/jiji262/douyin-downloader/issues)

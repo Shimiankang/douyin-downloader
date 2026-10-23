@@ -132,6 +132,9 @@ python DouYinCommand.py --cmd False
 # 在 config.yml 中设置 link 为单个视频链接
 python DouYinCommand.py
 
+# 实况／动图作品：link 也可以是带 modal_id 的用户主页作品链接
+# 下载结果包含静图和对应的 *_live.mp4
+
 # 下载用户主页
 # 在 config.yml 中设置 link 为用户主页链接
 python DouYinCommand.py
