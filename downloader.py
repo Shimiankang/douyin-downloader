@@ -44,6 +44,7 @@ from apiproxy.douyin.result import Result
 from apiproxy.common.utils import Utils
 from apiproxy.douyin.auth.cookie_manager import AutoCookieManager
 from apiproxy.douyin.database import DataBase
+from apiproxy.douyin.media import gallery_images, image_suffix, image_urls, live_photo_url
 
 # 配置日志
 logging.basicConfig(
@@ -248,11 +249,13 @@ class UnifiedDownloader:
     
     def detect_content_type(self, url: str) -> ContentType:
         """检测URL内容类型"""
+        if re.search(r'(?:[?&])modal_id=\d+', url):
+            return ContentType.VIDEO
         if '/user/' in url:
             return ContentType.USER
         elif '/video/' in url or 'v.douyin.com' in url:
             return ContentType.VIDEO
-        elif '/note/' in url:
+        elif '/note/' in url or '/slides/' in url:
             return ContentType.IMAGE
         elif '/collection/' in url or '/mix/' in url:
             return ContentType.MIX
@@ -283,6 +286,11 @@ class UnifiedDownloader:
             url: 要解析的URL
             content_type: 内容类型（可选，用于指导提取）
         """
+        # A modal work URL often has /user/ in its path.
+        modal = re.search(r'(?:[?&])modal_id=(\d+)', url)
+        if modal:
+            return modal.group(1)
+
         # 如果已知是用户页面，直接提取用户ID
         if content_type == ContentType.USER or '/user/' in url:
             user_patterns = [
@@ -300,7 +308,7 @@ class UnifiedDownloader:
         # 视频ID模式（优先）
         video_patterns = [
             r'/video/(\d+)',
-            r'/note/(\d+)',
+            r'/(?:note|slides)/(\d+)',
             r'modal_id=(\d+)',
             r'aweme_id=(\d+)',
             r'item_id=(\d+)'
@@ -476,7 +484,7 @@ class UnifiedDownloader:
                 if cookie_str:
                     from apiproxy.douyin import douyin_headers
                     douyin_headers['Cookie'] = cookie_str
-                    logger.info(f"设置 Cookie 到 Douyin 类: {cookie_str[:100]}...")
+                    logger.info("已将 Cookie 设置到 Douyin 类")
             
             try:
                 # 使用现有的成功实现
@@ -560,7 +568,8 @@ class UnifiedDownloader:
         """下载媒体文件"""
         try:
             # 判断类型
-            is_image = bool(video_info.get('images'))
+            images = gallery_images(video_info)
+            is_image = bool(images)
             
             # 构建保存路径
             author_name = video_info.get('author', {}).get('nickname', 'unknown')
@@ -588,16 +597,34 @@ class UnifiedDownloader:
             success = True
             
             if is_image:
-                # 下载图文（无水印）
-                images = video_info.get('images', [])
-                for i, img in enumerate(images):
-                    img_url = self._get_best_quality_url(img.get('url_list', []))
-                    if img_url:
-                        file_path = save_dir / f"image_{i+1}.jpg"
-                        if await self._download_file(img_url, file_path):
-                            logger.info(f"下载图片 {i+1}/{len(images)}: {file_path.name}")
+                # A Live Photo has a still image and a motion MP4 per entry.
+                downloaded_assets = 0
+                for i, img in enumerate(images, start=1):
+                    still_urls = image_urls(img)
+                    motion_url = live_photo_url(img)
+                    if still_urls:
+                        file_path = save_dir / f"image_{i}{image_suffix(still_urls[0], '.jpg')}"
+                        for candidate_index, still_url in enumerate(still_urls):
+                            if await self._download_file(
+                                still_url, file_path,
+                                quiet=candidate_index < len(still_urls) - 1,
+                            ):
+                                downloaded_assets += 1
+                                break
+                        else:
+                            logger.error(f"图片 {i} 的所有无水印地址均下载失败")
+                            success = False
+                    else:
+                        logger.warning(f"图片 {i} 没有无水印地址，跳过静图")
+                    if motion_url:
+                        file_path = save_dir / f"image_{i}_live.mp4"
+                        if await self._download_file(motion_url, file_path):
+                            downloaded_assets += 1
                         else:
                             success = False
+                if not downloaded_assets:
+                    logger.error("图集没有可下载的图片或实况视频")
+                    success = False
             else:
                 # 下载视频（无水印）
                 video_url = self._get_no_watermark_url(video_info)
@@ -695,7 +722,7 @@ class UnifiedDownloader:
         except:
             return None
     
-    async def _download_file(self, url: str, save_path: Path) -> bool:
+    async def _download_file(self, url: str, save_path: Path, quiet: bool = False) -> bool:
         """下载文件"""
         try:
             if save_path.exists():
@@ -710,11 +737,13 @@ class UnifiedDownloader:
                             f.write(content)
                         return True
                     else:
-                        logger.error(f"下载失败，状态码: {response.status}")
+                        log = logger.warning if quiet else logger.error
+                        log(f"下载失败，状态码: {response.status}")
                         return False
                         
         except Exception as e:
-            logger.error(f"下载文件失败 {url}: {e}")
+            log = logger.warning if quiet else logger.error
+            log(f"下载文件失败 {url}: {e}")
             return False
     
     async def download_user_page(self, url: str) -> bool:
