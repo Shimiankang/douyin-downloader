@@ -166,4 +166,5 @@ cookies.pkl
 README.md
 cookies_browser.txt
 cookies.txt
+cookies_backup_*.json
 dy-downloader/config/cookies.json

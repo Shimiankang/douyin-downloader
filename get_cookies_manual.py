@@ -55,10 +55,9 @@ def parse_cookie_string(cookie_str: str) -> Dict[str, str]:
     return cookies
 
 def validate_cookies(cookies: Dict[str, str]) -> bool:
-    """验证Cookie是否包含必要字段"""
-    # 必要的Cookie字段
+    """检查常见字段格式；实际可用性仍需请求目标接口确认。"""
     required_fields = ['ttwid']  # 最少需要ttwid
-    important_fields = ['sessionid', 'sessionid_ss', 'passport_csrf_token', 'msToken']
+    important_fields = ['sessionid', 'sessionid_ss', 'passport_csrf_token']
     
     # 检查必要字段
     missing_required = []
@@ -79,6 +78,8 @@ def validate_cookies(cookies: Dict[str, str]) -> bool:
     if missing_important:
         print(f"\n⚠️ 缺少部分重要Cookie字段: {', '.join(missing_important)}")
         print("可能会影响某些功能，但可以尝试使用")
+    if 'msToken' not in cookies:
+        print("\nℹ️ 未包含 msToken；这不代表 Cookie 无效，请以目标接口的实际响应为准")
     
     return True
 
@@ -209,7 +210,7 @@ def main():
         if cookies:
             print("\n🔍 验证Cookie...")
             if validate_cookies(cookies):
-                print("✅ Cookie格式正确")
+                print("✅ Cookie字段格式检查通过")
                 print("\n注意：这只是格式验证，实际是否有效需要测试下载功能")
         else:
             print("\n❌ 未找到配置的Cookie")
