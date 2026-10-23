@@ -1,6 +1,6 @@
 # Core dependencies
 requests==2.31.0          # HTTP 请求库
-pyyaml==6.0.1            # YAML 配置支持
+pyyaml==6.0.3            # YAML 配置支持
 rich==13.7.0             # 终端美化
 
 # Async support (optional)
