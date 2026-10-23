@@ -23,3 +23,11 @@ def test_parse_gallery_url_sets_aweme_id():
 def test_parse_unsupported_url_returns_none():
     url = "https://www.douyin.com/music/123456"
     assert URLParser.parse(url) is None
+
+
+def test_parse_user_modal_as_single_work():
+    url = ('https://www.douyin.com/user/example?from_tab_name=main'
+           '&modal_id=7635932187272477412')
+    parsed = URLParser.parse(url)
+    assert parsed['type'] == 'video'
+    assert parsed['aweme_id'] == '7635932187272477412'

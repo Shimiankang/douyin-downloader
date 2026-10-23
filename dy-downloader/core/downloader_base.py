@@ -11,6 +11,7 @@ from control import QueueManager, RateLimiter, RetryHandler
 from core.api_client import DouyinAPIClient
 from utils.logger import setup_logger
 from utils.validators import sanitize_filename
+from utils.gallery_media import gallery_images, image_suffix, image_url, image_urls, live_photo_url
 
 logger = setup_logger('BaseDownloader')
 
@@ -164,23 +165,40 @@ class BaseDownloader(ABC):
                     )
 
         elif media_type == 'gallery':
-            image_urls = self._collect_image_urls(aweme_data)
-            if not image_urls:
+            images = gallery_images(aweme_data)
+            if not images:
                 logger.error(f'No images found for aweme {aweme_id}')
                 return False
 
-            for index, image_url in enumerate(image_urls, start=1):
-                suffix = Path(urlparse(image_url).path).suffix or '.jpg'
-                image_path = save_dir / f"{safe_title}_{aweme_id}_{index}{suffix}"
-                success = await self._download_with_retry(
-                    image_url,
-                    image_path,
-                    session,
-                    headers=self._download_headers(),
-                )
-                if not success:
-                    logger.error(f'Failed downloading image {index} for aweme {aweme_id}')
-                    return False
+            downloaded_assets = 0
+            for index, image in enumerate(images, start=1):
+                still_urls = image_urls(image)
+                motion_url = live_photo_url(image)
+                if still_urls:
+                    image_path = save_dir / f"{safe_title}_{aweme_id}_{index}{image_suffix(still_urls[0], '.jpg')}"
+                    for candidate_index, still_url in enumerate(still_urls):
+                        if await self._download_with_retry(
+                            still_url, image_path, session, headers=self._download_headers(),
+                            optional=candidate_index < len(still_urls) - 1,
+                        ):
+                            downloaded_assets += 1
+                            break
+                    else:
+                        logger.error(f'Failed downloading image {index} for aweme {aweme_id}')
+                        return False
+                else:
+                    logger.warning(f'No watermark-free URL for image {index} of aweme {aweme_id}')
+                if motion_url:
+                    motion_path = save_dir / f"{safe_title}_{aweme_id}_{index}_live.mp4"
+                    if not await self._download_with_retry(
+                        motion_url, motion_path, session, headers=self._download_headers()
+                    ):
+                        logger.error(f'Failed downloading Live Photo clip {index} for aweme {aweme_id}')
+                        return False
+                    downloaded_assets += 1
+            if not downloaded_assets:
+                logger.error(f'No usable gallery assets for aweme {aweme_id}')
+                return False
         else:
             logger.error(f"Unsupported media type for aweme {aweme_id}: {media_type}")
             return False
@@ -243,7 +261,7 @@ class BaseDownloader(ABC):
             return False
 
     def _detect_media_type(self, aweme_data: Dict[str, Any]) -> str:
-        if aweme_data.get('image_post_info') or aweme_data.get('images'):
+        if gallery_images(aweme_data) or aweme_data.get('aweme_type') in (2, 68, 150):
             return 'gallery'
         return 'video'
 
@@ -287,14 +305,8 @@ class BaseDownloader(ABC):
         return None
 
     def _collect_image_urls(self, aweme_data: Dict[str, Any]) -> List[str]:
-        image_urls: List[str] = []
-        image_post = aweme_data.get('image_post_info', {})
-        images = image_post.get('images') or aweme_data.get('images') or []
-        for item in images:
-            url_list = item.get('url_list') if isinstance(item, dict) else None
-            if url_list:
-                image_urls.append(url_list[0])
-        return image_urls
+        return [url for image in gallery_images(aweme_data)
+                if (url := image_url(image))]
 
     @staticmethod
     def _extract_first_url(source: Any) -> Optional[str]:

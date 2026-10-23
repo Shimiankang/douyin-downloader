@@ -24,7 +24,9 @@ class VideoDownloader(BaseDownloader):
 
         await self.rate_limiter.acquire()
 
-        aweme_data = await self.api_client.get_video_detail(aweme_id)
+        aweme_data = await self.api_client.get_video_detail(
+            aweme_id, gallery=parsed_url.get('type') == 'gallery'
+        )
         if not aweme_data:
             logger.error(f"Failed to get video detail: {aweme_id}")
             result.failed += 1

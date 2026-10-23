@@ -79,3 +79,39 @@ async def test_build_no_watermark_url_signs_with_headers(tmp_path, monkeypatch):
     assert headers['Referer'].startswith('https://www.douyin.com')
 
     await api_client.close()
+
+
+@pytest.mark.asyncio
+async def test_gallery_downloads_still_and_live_clip(tmp_path, monkeypatch):
+    downloader, api_client = _build_downloader(tmp_path)
+    downloader.config.update(avatar=False, json=False)
+    downloaded = []
+
+    async def fake_session():
+        return object()
+
+    async def fake_download(url, save_path, session, headers=None):
+        downloaded.append((url, save_path.name))
+        return url != 'https://cdn.example/still.jpg'
+
+    monkeypatch.setattr(api_client, 'get_session', fake_session)
+    monkeypatch.setattr(downloader.file_manager, 'download_file', fake_download)
+
+    aweme = {
+        'aweme_id': '123',
+        'desc': '实况图',
+        'image_post_info': {'image_list': [
+            {'url_list': ['https://cdn.example/still.jpg', 'https://backup.example/still.jpg'],
+             'download_url_list': ['https://cdn.example/still-watermarked.jpg'],
+             'video': {'play_addr': {'url_list': ['https://cdn.example/live.mp4']}}},
+        ]},
+    }
+    assert downloader._detect_media_type(aweme) == 'gallery'
+    assert await downloader._download_aweme_assets(aweme, 'author') is True
+    assert downloaded == [
+        ('https://cdn.example/still.jpg', '实况图_123_1.jpg'),
+        ('https://backup.example/still.jpg', '实况图_123_1.jpg'),
+        ('https://cdn.example/live.mp4', '实况图_123_1_live.mp4'),
+    ]
+
+    await api_client.close()

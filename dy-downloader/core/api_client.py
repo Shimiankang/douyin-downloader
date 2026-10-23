@@ -92,24 +92,44 @@ class DouyinAPIClient:
         url = f"{self.BASE_URL}{path}?{query}"
         return self.sign_url(url)
 
-    async def get_video_detail(self, aweme_id: str) -> Optional[Dict[str, Any]]:
-        params = self._default_query()
-        params.update({
-            'aweme_id': aweme_id,
-            'aid': '1128',
-        })
-
+    async def get_video_detail(self, aweme_id: str, gallery: bool = False) -> Optional[Dict[str, Any]]:
         await self._ensure_session()
-        signed_url, ua = self.build_signed_path('/aweme/v1/web/aweme/detail/', params)
+        # The web detail endpoint can filter galleries for one aid while
+        # accepting videos. Try the gallery-friendly aid first for /note/.
+        for aid in (('6383', '1128') if gallery else ('1128', '6383')):
+            params = self._default_query()
+            params.update({'aweme_id': aweme_id, 'aid': aid})
+            signed_url, ua = self.build_signed_path('/aweme/v1/web/aweme/detail/', params)
+            try:
+                async with self._session.get(signed_url, headers={**self.headers, 'User-Agent': ua}) as response:
+                    if response.status != 200:
+                        logger.warning(f"Detail request failed: {aweme_id}, aid={aid}, status={response.status}")
+                        continue
+                    data = await response.json(content_type=None)
+                    detail = data.get('aweme_detail')
+                    if detail:
+                        return detail
+            except Exception as e:
+                logger.warning(f"Detail request failed: {aweme_id}, aid={aid}, error={e}")
 
+        # A minimal request with the Open Platform origin can still return the
+        # full PC detail, including a gallery image's motion video, when the
+        # signed browser-style requests are blocked.
+        fallback_url = f'{self.BASE_URL}/aweme/v1/web/aweme/detail/?aweme_id={aweme_id}&aid=6383'
+        fallback_headers = {
+            'User-Agent': self.headers['User-Agent'],
+            'Origin': 'https://open.douyin.com',
+            'Referer': 'https://open.douyin.com/',
+            'Accept': 'application/json',
+        }
         try:
-            async with self._session.get(signed_url, headers={**self.headers, 'User-Agent': ua}) as response:
+            async with self._session.get(fallback_url, headers=fallback_headers) as response:
                 if response.status == 200:
                     data = await response.json(content_type=None)
                     return data.get('aweme_detail')
-                logger.error(f"Video detail request failed: {aweme_id}, status={response.status}")
+                logger.warning(f"Detail fallback failed: {aweme_id}, status={response.status}")
         except Exception as e:
-            logger.error(f"Failed to get video detail: {aweme_id}, error: {e}")
+            logger.warning(f"Detail fallback failed: {aweme_id}, error={e}")
 
         return None
 
