@@ -17,6 +17,7 @@ from apiproxy.douyin import douyin_headers
 from apiproxy.douyin.urls import Urls
 from apiproxy.douyin.result import Result
 from apiproxy.douyin.database import DataBase
+from apiproxy.douyin.media import gallery_images
 from apiproxy.common import utils
 import sys
 import os
@@ -39,6 +40,19 @@ class Douyin(object):
         self.timeout = 10
         self.console = Console()  # 也可以在实例中创建console
 
+    @staticmethod
+    def _open_web_headers():
+        """Minimal headers for the Open Platform Web API fallback."""
+        headers = {
+            'User-Agent': douyin_headers['User-Agent'],
+            'Origin': 'https://open.douyin.com',
+            'Referer': 'https://open.douyin.com/',
+            'Accept': 'application/json',
+        }
+        if douyin_headers.get('Cookie'):
+            headers['Cookie'] = douyin_headers['Cookie']
+        return headers
+
     # 从分享链接中提取网址
     def getShareLink(self, string):
         # findall() 查找匹配正则表达式的字符串
@@ -55,6 +69,11 @@ class Douyin(object):
         """
         key = None
         key_type = None
+
+        # A work opened as a modal on a user page still represents one aweme.
+        modal = re.search(r'(?:[?&])modal_id=(\d+)', url)
+        if modal:
+            return "aweme", modal.group(1)
 
         try:
             r = requests.get(url=url, headers=douyin_headers)
@@ -87,6 +106,9 @@ class Douyin(object):
         elif "/note/" in urlstr:
             # 获取note aweme_id
             key = re.findall('note/(\d+)?', urlstr)[0]
+            key_type = "aweme"
+        elif "/slides/" in urlstr:
+            key = re.findall(r'slides/(\d+)', urlstr)[0]
             key_type = "aweme"
         elif "/mix/detail/" in urlstr:
             # 获取合集 id
@@ -159,56 +181,37 @@ class Douyin(object):
     def _try_detail_api(self, aweme_id: str) -> dict:
         """尝试使用原有的单个视频接口"""
         try:
-            start = time.time()
-            while True:
+            detail_params = f'aweme_id={aweme_id}&device_platform=webapp&aid=6383&channel=channel_pc_web&pc_client_type=1&version_code=170400&version_name=17.4.0&cookie_enabled=true&screen_width=1920&screen_height=1080&browser_language=zh-CN&browser_platform=MacIntel&browser_name=Chrome&browser_version=122.0.0.0&browser_online=true&engine_name=Blink&engine_version=122.0.0.0&os_name=Mac&os_version=10.15.7&cpu_core_num=8&device_memory=8&platform=PC&downlink=10&effective_type=4g&round_trip_time=50&update_version_code=170400'
+            signed_url = self.urls.POST_DETAIL + utils.getXbogus(detail_params)
+            # Some PC requests are rejected by Argus while this lighter Web
+            # request still exposes images[i].video.play_addr for Live Photos.
+            detail = None
+            for url, headers in (
+                (signed_url, douyin_headers),
+                (f'{self.urls.POST_DETAIL}aweme_id={aweme_id}&aid=6383', self._open_web_headers()),
+            ):
                 try:
-                    # 单作品接口返回 'aweme_detail'
-                    # 主页作品接口返回 'aweme_list'->['aweme_detail']
-                    # 更新API参数以适应最新接口要求
-                    detail_params = f'aweme_id={aweme_id}&device_platform=webapp&aid=6383&channel=channel_pc_web&pc_client_type=1&version_code=170400&version_name=17.4.0&cookie_enabled=true&screen_width=1920&screen_height=1080&browser_language=zh-CN&browser_platform=MacIntel&browser_name=Chrome&browser_version=122.0.0.0&browser_online=true&engine_name=Blink&engine_version=122.0.0.0&os_name=Mac&os_version=10.15.7&cpu_core_num=8&device_memory=8&platform=PC&downlink=10&effective_type=4g&round_trip_time=50&update_version_code=170400'
-                    jx_url = self.urls.POST_DETAIL + utils.getXbogus(detail_params)
-
-                    response = requests.get(url=jx_url, headers=douyin_headers, timeout=10)
-
-                    # 检查响应是否为空
-                    if len(response.text) == 0:
-                        logger.warning("单个视频接口返回空响应")
-                        return {}
-
-                    datadict = json.loads(response.text)
-
-                    # 添加调试信息
-                    logger.info(f"单个视频API响应状态: {datadict.get('status_code') if datadict else 'None'}")
-                    if datadict and datadict.get("status_code") != 0:
-                        logger.warning(f"单个视频API错误: {datadict.get('status_msg', '未知错误')}")
-                        return {}
-
-                    if datadict is not None and datadict.get("status_code") == 0:
-                        # 检查是否有aweme_detail字段
-                        if "aweme_detail" not in datadict:
-                            logger.error(f"响应中缺少aweme_detail字段，可用字段: {list(datadict.keys())}")
-                            return {}
+                    response = requests.get(url=url, headers=headers, timeout=10)
+                    if response.status_code != 200:
+                        logger.warning(f"单个作品接口返回 HTTP {response.status_code}")
+                        continue
+                    payload = response.json()
+                    if payload.get('status_code') == 0 and payload.get('aweme_detail'):
+                        detail = payload['aweme_detail']
                         break
-                except Exception as e:
-                    end = time.time()
-                    if end - start > self.timeout:
-                        logger.warning(f"重复请求该接口{self.timeout}s, 仍然未获取到数据")
-                        return {}
+                    logger.warning(f"单个作品接口返回状态 {payload.get('status_code')}")
+                except (RequestException, ValueError) as e:
+                    logger.warning(f"单个作品接口请求失败: {e}")
+            if not detail:
+                return {}
 
             # 清空self.awemeDict
             self.result.clearDict(self.result.awemeDict)
 
-            # 默认为视频
-            awemeType = 0
-            try:
-                # datadict['aweme_detail']["images"] 不为 None 说明是图集
-                if datadict['aweme_detail']["images"] is not None:
-                    awemeType = 1
-            except Exception as e:
-                logger.warning("接口中未找到 images")
+            awemeType = 1 if gallery_images(detail) else 0
 
             # 转换成我们自己的格式
-            self.result.dataConvert(awemeType, self.result.awemeDict, datadict['aweme_detail'])
+            self.result.dataConvert(awemeType, self.result.awemeDict, detail)
 
             return self.result.awemeDict
 
@@ -297,6 +300,18 @@ class Douyin(object):
 
                     # 发送请求
                     res = requests.get(url=url, headers=douyin_headers, timeout=10)
+
+                    if mode == "post" and res.status_code != 200:
+                        # The signed PC request can return HTTP 403 even with
+                        # a working login Cookie. The minimal Web request is
+                        # accepted for public posts with that same Cookie.
+                        fallback_url = (
+                            f'{self.urls.USER_POST}sec_user_id={sec_uid}'
+                            f'&count={count}&max_cursor={max_cursor}&aid=6383'
+                        )
+                        res = requests.get(
+                            url=fallback_url, headers=self._open_web_headers(), timeout=10
+                        )
 
                     # 检查HTTP状态码
                     if res.status_code != 200:
@@ -401,7 +416,7 @@ class Douyin(object):
         """转换作品数据格式"""
         try:
             self.result.clearDict(self.result.awemeDict)
-            aweme_type = 1 if aweme.get("images") else 0
+            aweme_type = 1 if gallery_images(aweme) else 0
             self.result.dataConvert(aweme_type, self.result.awemeDict, aweme)
             return copy.deepcopy(self.result.awemeDict)
         except Exception as e:
@@ -820,13 +835,7 @@ class Douyin(object):
                 # 清空self.awemeDict
                 self.result.clearDict(self.result.awemeDict)
 
-                # 默认为视频
-                awemeType = 0
-                try:
-                    if aweme["images"] is not None:
-                        awemeType = 1
-                except Exception as e:
-                    print("[  警告  ]:接口中未找到 images\r")
+                awemeType = 1 if gallery_images(aweme) else 0
 
                 # 转换成我们自己的格式
                 self.result.dataConvert(awemeType, self.result.awemeDict, aweme)

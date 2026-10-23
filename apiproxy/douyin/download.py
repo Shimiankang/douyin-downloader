@@ -20,6 +20,7 @@ from rich.text import Text
 from rich import print as rprint
 
 from apiproxy.douyin import douyin_headers
+from apiproxy.douyin.media import gallery_images, image_suffix, image_urls, live_photo_url
 from apiproxy.common import utils
 
 logger = logging.getLogger("douyin_downloader")
@@ -52,8 +53,13 @@ class Download(object):
             self.console.print(f"[cyan]⏭️  跳过已存在: {desc}[/]")
             return True
             
-        # 使用新的断点续传下载方法替换原有的下载逻辑
-        return self.download_with_resume(url, path, desc)
+        # Only a completed transfer gets the final name. A failed Live Photo
+        # clip can then resume from its .part file on the next run.
+        partial_path = path.with_name(path.name + '.part')
+        if not self.download_with_resume(url, partial_path, desc):
+            return False
+        partial_path.replace(path)
+        return True
 
     def _get_first_url(self, url_list: list) -> str:
         """安全地获取URL列表中的第一个URL"""
@@ -75,14 +81,27 @@ class Download(object):
                     logger.warning(f"视频URL为空: {desc}")
 
             elif aweme["awemeType"] == 1:  # 图集
-                for i, image in enumerate(aweme.get("images", [])):
-                    url_list = image.get("url_list", [])
-                    if url := self._get_first_url(url_list):
-                        image_path = path / f"{name}_image_{i}.jpeg"
-                        if not self._download_media(url, image_path, f"[图集{i+1}]{desc}"):
-                            raise Exception(f"图片{i+1}下载失败")
+                downloaded_assets = 0
+                for i, image in enumerate(gallery_images(aweme), start=1):
+                    still_urls = image_urls(image)
+                    motion_url = live_photo_url(image)
+                    if still_urls:
+                        image_path = path / f"{name}_image_{i}{image_suffix(still_urls[0])}"
+                        if not any(self._download_media(url, image_path, f"[图片{i}]{desc}")
+                                   for url in still_urls):
+                            raise Exception(f"图片{i}下载失败")
+                        downloaded_assets += 1
                     else:
-                        logger.warning(f"图片{i+1} URL为空: {desc}")
+                        logger.warning(f"图片{i}没有无水印地址，跳过静图: {desc}")
+                    if motion_url:
+                        motion_path = path / f"{name}_image_{i}_live.mp4"
+                        if not self._download_media(motion_url, motion_path, f"[实况视频{i}]{desc}"):
+                            raise Exception(f"实况视频{i}下载失败")
+                        downloaded_assets += 1
+                    if not still_urls and not motion_url:
+                        logger.warning(f"图片{i}无可用媒体地址: {desc}")
+                if not downloaded_assets:
+                    raise Exception("图集没有可下载的图片或实况视频")
 
             # 下载音乐
             if self.music:
@@ -112,11 +131,11 @@ class Download(object):
         except Exception as e:
             raise Exception(f"下载失败: {str(e)}")
 
-    def awemeDownload(self, awemeDict: dict, savePath: Path) -> None:
+    def awemeDownload(self, awemeDict: dict, savePath: Path) -> bool:
         """下载单个作品的所有内容"""
         if not awemeDict:
             logger.warning("无效的作品数据")
-            return
+            return False
             
         try:
             # 创建保存目录
@@ -135,9 +154,11 @@ class Download(object):
             # 下载媒体文件
             desc = file_name[:30]
             self._download_media_files(awemeDict, aweme_path, file_name, desc)
+            return True
                 
         except Exception as e:
             logger.error(f"处理作品时出错: {str(e)}")
+            return False
 
     def _save_json(self, path: Path, data: dict) -> None:
         """保存JSON数据"""
@@ -150,7 +171,7 @@ class Download(object):
     def userDownload(self, awemeList: List[dict], savePath: Path):
         if not awemeList:
             self.console.print("[yellow]⚠️  没有找到可下载的内容[/]")
-            return
+            return 0
 
         save_path = Path(savePath)
         save_path.mkdir(parents=True, exist_ok=True)
@@ -179,8 +200,8 @@ class Download(object):
             
             for aweme in awemeList:
                 try:
-                    self.awemeDownload(awemeDict=aweme, savePath=save_path)
-                    success_count += 1
+                    if self.awemeDownload(awemeDict=aweme, savePath=save_path):
+                        success_count += 1
                     self.progress.update(download_task, advance=1)
                 except Exception as e:
                     self.console.print(f"[red]❌ 下载失败: {str(e)}[/]")
@@ -201,6 +222,7 @@ class Download(object):
             title="下载统计",
             border_style="green"
         ))
+        return success_count
 
     def download_with_resume(self, url: str, filepath: Path, desc: str) -> bool:
         """支持断点续传的下载方法"""
@@ -215,8 +237,13 @@ class Download(object):
                 if response.status_code not in (200, 206):
                     raise Exception(f"HTTP {response.status_code}")
 
+                # A server that ignores Range returns 200 and a full body.
+                # Restart in that case instead of appending duplicate bytes.
+                resume = file_size > 0 and response.status_code == 206
+                if not resume:
+                    file_size = 0
                 total_size = int(response.headers.get('content-length', 0)) + file_size
-                mode = 'ab' if file_size > 0 else 'wb'
+                mode = 'ab' if resume else 'wb'
 
                 with self.progress:
                     task = self.progress.add_task(f"[cyan]⬇️  {desc}", total=total_size)

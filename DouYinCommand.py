@@ -32,6 +32,7 @@ except ImportError:
 
 from apiproxy.douyin.douyin import Douyin
 from apiproxy.douyin.download import Download
+from apiproxy.douyin.media import gallery_images
 from apiproxy.douyin import douyin_headers
 from apiproxy.common import utils
 
@@ -413,9 +414,9 @@ def handle_aweme_download(dy, dl, key):
                 awemePath = os.path.join(configModel["path"], "aweme")
                 os.makedirs(awemePath, exist_ok=True)
                 
-                # 下载前检查视频URL
+                # 图集没有顶层视频地址，媒体地址在每张图片中。
                 video_url = datanew.get("video", {}).get("play_addr", {}).get("url_list", [])
-                if not video_url or len(video_url) == 0:
+                if not gallery_images(datanew) and not video_url:
                     douyin_logger.error("[  错误  ]:无法获取视频URL")
                     retry_count += 1
                     if retry_count < max_retries:
@@ -423,10 +424,11 @@ def handle_aweme_download(dy, dl, key):
                         time.sleep(5)
                     continue
                     
-                douyin_logger.info(f"[  提示  ]:获取到视频URL，准备下载")
-                dl.userDownload(awemeList=[datanew], savePath=awemePath)
-                douyin_logger.info(f"[  成功  ]:视频下载完成")
-                return True
+                douyin_logger.info("[  提示  ]:获取到作品媒体地址，准备下载")
+                if dl.userDownload(awemeList=[datanew], savePath=awemePath):
+                    douyin_logger.info("[  成功  ]:作品下载完成")
+                    return True
+                douyin_logger.error("[  错误  ]:作品媒体下载失败")
             else:
                 douyin_logger.error("[  错误  ]:作品数据为空")
                 

@@ -5,6 +5,8 @@
 import time
 import copy
 
+from apiproxy.douyin.media import gallery_images
+
 
 class Result(object):
     def __init__(self):
@@ -236,11 +238,9 @@ class Result(object):
                 # 当 解析的链接 是图片时
                 if item == "images":
                     if awemeType == 1:
-                        for image in dataRaw[item]:
-                            for i in image:
-                                self.picDict[i] = image[i]
-                            # 字典要深拷贝
-                            self.awemeDict["images"].append(copy.deepcopy(self.picDict))
+                        # Keep each image's nested video.play_addr: Live Photos
+                        # consist of a still image and a short motion clip.
+                        dataNew["images"] = copy.deepcopy(gallery_images(dataRaw))
                     continue
                 # 当 解析的链接 是视频时
                 if item == "video":
