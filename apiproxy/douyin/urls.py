@@ -35,6 +35,8 @@ class Urls(object):
 
         # 用户评论
         self.COMMENT = 'https://www.douyin.com/aweme/v1/web/comment/list/?'
+        self.COMMENT_REPLY = 'https://www.douyin.com/aweme/v1/web/comment/list/reply/?'
+        self.EMOJI_LIST = 'https://www.douyin.com/aweme/v1/web/emoji/list/?'
 
         # 首页朋友作品
         self.FRIEND_FEED = 'https://www.douyin.com/aweme/v1/web/familiar/feed/?'

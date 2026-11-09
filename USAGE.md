@@ -29,6 +29,15 @@ python DouYinCommand.py
 
 动图／实况作品也可以按单个作品下载：把网页版链接（包括 `modal_id`）填入 `config.yml` 的 `link`，再运行上面的命令。每张实况图会保存一张静图（如 `*_image_1.webp`）和一段动态视频（`*_image_1_live.mp4`）；普通图集仍只保存静图。配置文件名是 `config.yml`。
 
+#### 抓取单个作品的评论
+```bash
+python download_comments.py "https://www.douyin.com/user/self?modal_id=作品ID"
+# 全部可访问的一级评论和回复
+python download_comments.py 作品ID --limit 0 --reply-limit 0
+```
+
+此命令读取 `config.yml` 中的 Cookie，默认保存前 100 条一级评论和每条评论前 100 条回复。输出目录为 `Downloaded/comments/作品ID/`，其中 `comments.json` 包含文本、作者、回复关系及媒体路径，`comments_raw.json` 保留完整原始评论数据，`media/` 存图片、贴纸、动图和可获取的音视频文件。可用 `--no-media` 只导出 JSON，或 `--no-replies` 跳过回复。资源地址缺失或接口无权访问的内容无法下载。
+
 #### V2.0 增强版（推荐用于用户主页）
 ```bash
 # 下载用户主页

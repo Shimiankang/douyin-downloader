@@ -10,6 +10,7 @@
 - [版本说明](#-版本说明)
 - [V1.0 使用指南](#-v10-使用指南)
 - [V2.0 使用指南](#-v20-使用指南)
+- [作品评论抓取](#-作品评论抓取)
 - [Cookie 配置工具](#-cookie-配置工具)
 - [支持的链接类型](#-支持的链接类型)
 - [常见问题](#-常见问题)
@@ -224,6 +225,20 @@ python downloader.py [选项] [链接...]
   --cookies COOKIES      手动指定 Cookie
   -h, --help            显示帮助信息
 ```
+
+## 💬 作品评论抓取
+
+使用 `config.yml` 中的 `cookies`，抓取单个作品的一级评论、回复以及评论中的图片、贴纸、动图和可用的音频／视频资源：
+
+```bash
+python download_comments.py "https://www.douyin.com/user/self?modal_id=作品ID"
+# 默认一级评论最多 100 条，每条评论的回复最多 100 条；0 表示不限数量
+python download_comments.py 作品ID --limit 0 --reply-limit 0
+# 仅导出评论数据
+python download_comments.py 作品ID --no-media
+```
+
+结果保存在 `Downloaded/comments/作品ID/`：`comments.json` 是整理后的评论和媒体路径，`comments_raw.json` 保留接口返回的完整评论对象，`media/` 放下载的文件。普通 Unicode 表情保留在评论文字中；带资源地址的自定义表情、贴纸和 GIF 会另存为媒体。某种评论媒体若没有可用地址，其原始字段仍会保留在 `comments_raw.json` 中。接口只会返回当前 Cookie 有权查看的评论，分页结果可能与页面显示总数不同。
 
 ## 🍪 Cookie 配置工具
 
