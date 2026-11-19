@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import json
 import re
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import requests
 
 from apiproxy.common import utils
 from apiproxy.douyin import douyin_headers
+from apiproxy.douyin.comment_download import download_comment_media
 from apiproxy.douyin.urls import Urls
 
 
@@ -400,3 +403,49 @@ def make_export(aweme_id: str, source: str, comments: list[dict],
         "warnings": warnings,
         "comments": comments,
     }
+
+
+def _write_json(path: Path, data) -> None:
+    temporary = path.with_name(path.name + ".tmp")
+    with temporary.open("w", encoding="utf-8") as file:
+        json.dump(data, file, ensure_ascii=False, indent=2)
+    temporary.replace(path)
+
+
+def export_comments(
+    client: CommentClient,
+    aweme_id: str,
+    output_dir: Path,
+    *,
+    source: str | None = None,
+    limit: int = 100,
+    reply_limit: int = 100,
+    include_replies: bool = True,
+    download_media: bool = True,
+) -> tuple[dict, int, int]:
+    """Crawl one work's comments, optionally download media, and save JSON exports."""
+    comments, raw = client.crawl(
+        aweme_id, limit=limit, reply_limit=reply_limit,
+        include_replies=include_replies,
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+    downloaded = failures = 0
+    if download_media:
+        downloaded, failures = download_comment_media(
+            comments, output_dir, client.session
+        )
+    export = make_export(
+        aweme_id,
+        source or f"https://www.douyin.com/video/{aweme_id}",
+        comments,
+        client.reported_total,
+        client.warnings,
+    )
+    export["limits"] = {
+        "top_level": limit,
+        "per_reply_thread": reply_limit,
+        "include_replies": include_replies,
+    }
+    _write_json(output_dir / "comments.json", export)
+    _write_json(output_dir / "comments_raw.json", raw)
+    return export, downloaded, failures

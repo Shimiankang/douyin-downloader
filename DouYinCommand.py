@@ -45,6 +45,12 @@ class DownloadConfig:
     cover: bool = True
     avatar: bool = True
     json: bool = True
+    comment: bool = False
+    comment_limit: int = 100
+    comment_reply_limit: int = 100
+    comment_replies: bool = True
+    comment_media: bool = True
+    comment_interval: float = 0.5
     start_time: str = ""
     end_time: str = ""
     folderstyle: bool = True
@@ -80,6 +86,12 @@ configModel = {
     "cover": True,
     "avatar": True,
     "json": True,
+    "comment": False,
+    "comment_limit": 100,
+    "comment_reply_limit": 100,
+    "comment_replies": True,
+    "comment_media": True,
+    "comment_interval": 0.5,
     "start_time": "",
     "end_time": "",
     "folderstyle": True,
@@ -120,6 +132,18 @@ def argument():
                         type=utils.str2bool, required=False, default=True)
     parser.add_argument("--json", "-j", help="是否保存获取到的数据(True/False), 默认为True",
                         type=utils.str2bool, required=False, default=True)
+    parser.add_argument("--comment", help="是否抓取作品评论区(True/False), 默认为False",
+                        type=utils.str2bool, required=False, default=False)
+    parser.add_argument("--comment-limit", help="一级评论抓取上限, 0表示全部, 默认为100",
+                        type=int, required=False, default=100)
+    parser.add_argument("--comment-reply-limit", help="每条一级评论的回复抓取上限, 0表示全部, 默认为100",
+                        type=int, required=False, default=100)
+    parser.add_argument("--comment-replies", help="是否抓取评论回复(True/False), 默认为True",
+                        type=utils.str2bool, required=False, default=True)
+    parser.add_argument("--comment-media", help="是否下载评论中的图片/表情包等媒体(True/False), 默认为True",
+                        type=utils.str2bool, required=False, default=True)
+    parser.add_argument("--comment-interval", help="评论接口请求最小间隔(秒), 默认为0.5",
+                        type=float, required=False, default=0.5)
     parser.add_argument("--folderstyle", "-fs", help="文件保存风格, 默认为True",
                         type=utils.str2bool, required=False, default=True)
     parser.add_argument("--mode", "-M", help="link是个人主页时, 设置下载发布的作品(post)或喜欢的作品(like)或者用户所有合集(mix), 默认为post, 可以设置多种模式",
@@ -246,7 +270,13 @@ def main():
         cover=configModel["cover"],
         avatar=configModel["avatar"],
         resjson=configModel["json"],
-        folderstyle=configModel["folderstyle"]
+        folderstyle=configModel["folderstyle"],
+        comment=configModel["comment"],
+        comment_limit=configModel["comment_limit"],
+        comment_reply_limit=configModel["comment_reply_limit"],
+        comment_replies=configModel["comment_replies"],
+        comment_media=configModel["comment_media"],
+        comment_interval=configModel["comment_interval"],
     )
 
     # 处理每个链接
@@ -481,6 +511,12 @@ def update_config_from_args(args):
     configModel["cover"] = args.cover
     configModel["avatar"] = args.avatar
     configModel["json"] = args.json
+    configModel["comment"] = args.comment
+    configModel["comment_limit"] = args.comment_limit
+    configModel["comment_reply_limit"] = args.comment_reply_limit
+    configModel["comment_replies"] = args.comment_replies
+    configModel["comment_media"] = args.comment_media
+    configModel["comment_interval"] = args.comment_interval
     configModel["folderstyle"] = args.folderstyle
     configModel["mode"] = args.mode if args.mode else ["post"]
     configModel["thread"] = args.thread

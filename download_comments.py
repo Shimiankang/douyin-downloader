@@ -4,14 +4,12 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 
 import yaml
 
-from apiproxy.douyin.comment_download import download_comment_media
 from apiproxy.douyin.comments import (
-    CommentClient, CommentError, make_export, resolve_aweme_id,
+    CommentClient, CommentError, export_comments, resolve_aweme_id,
 )
 
 
@@ -29,13 +27,6 @@ def load_cookie(config_path: Path) -> str:
     if isinstance(cookies, str) and cookies.lower() != "auto":
         return cookies.strip()
     raise ValueError("请在 config.yml 的 cookies 中配置浏览器 Cookie")
-
-
-def _write_json(path: Path, data) -> None:
-    temporary = path.with_name(path.name + ".tmp")
-    with temporary.open("w", encoding="utf-8") as file:
-        json.dump(data, file, ensure_ascii=False, indent=2)
-    temporary.replace(path)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -63,27 +54,17 @@ def main(argv: list[str] | None = None) -> int:
         cookie = load_cookie(args.config)
         client = CommentClient(cookie, interval=args.interval)
         aweme_id = resolve_aweme_id(args.url, client.session)
-        comments, raw = client.crawl(
-            aweme_id, limit=args.limit, reply_limit=args.reply_limit,
-            include_replies=not args.no_replies,
-        )
         output_dir = args.output / aweme_id
-        output_dir.mkdir(parents=True, exist_ok=True)
-        downloaded = failures = 0
-        if not args.no_media:
-            downloaded, failures = download_comment_media(
-                comments, output_dir, client.session
-            )
-        export = make_export(
-            aweme_id, args.url, comments, client.reported_total,
-            client.warnings,
+        export, downloaded, failures = export_comments(
+            client,
+            aweme_id,
+            output_dir,
+            source=args.url,
+            limit=args.limit,
+            reply_limit=args.reply_limit,
+            include_replies=not args.no_replies,
+            download_media=not args.no_media,
         )
-        export["limits"] = {
-            "top_level": args.limit, "per_reply_thread": args.reply_limit,
-            "include_replies": not args.no_replies,
-        }
-        _write_json(output_dir / "comments.json", export)
-        _write_json(output_dir / "comments_raw.json", raw)
     except (OSError, ValueError, CommentError) as exc:
         parser.exit(1, f"抓取失败：{exc}\n")
 

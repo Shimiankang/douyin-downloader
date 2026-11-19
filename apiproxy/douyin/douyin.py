@@ -14,6 +14,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskPr
 from rich.console import Console
 
 from apiproxy.douyin import douyin_headers
+from apiproxy.douyin.comments import CommentClient, make_export
 from apiproxy.douyin.urls import Urls
 from apiproxy.douyin.result import Result
 from apiproxy.douyin.database import DataBase
@@ -892,6 +893,36 @@ class Douyin(object):
                 if end - start > self.timeout:
                     print("[  提示  ]:重复请求该接口" + str(self.timeout) + "s, 仍然未获取到数据")
                     return datadict
+
+    def getCommentInfo(
+        self,
+        aweme_id: str,
+        limit: int = 100,
+        reply_limit: int = 100,
+        include_replies: bool = True,
+        interval: float = 0.5,
+    ) -> dict:
+        """获取单个作品的评论信息（委托给 CommentClient）"""
+        client = CommentClient(douyin_headers.get("Cookie", ""), interval=interval)
+        comments, raw = client.crawl(
+            str(aweme_id),
+            limit=limit,
+            reply_limit=reply_limit,
+            include_replies=include_replies,
+        )
+        export = make_export(
+            str(aweme_id),
+            f"https://www.douyin.com/video/{aweme_id}",
+            comments,
+            client.reported_total,
+            client.warnings,
+        )
+        export["limits"] = {
+            "top_level": limit,
+            "per_reply_thread": reply_limit,
+            "include_replies": include_replies,
+        }
+        return {"export": export, "raw": raw, "warnings": list(client.warnings)}
 
 
 if __name__ == "__main__":

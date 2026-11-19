@@ -246,3 +246,105 @@ def test_embedded_replies_respect_reply_limit(monkeypatch):
     assert [item["cid"] for item in comments] == ["30", "31"]
     assert len(session.calls) == 1
     assert not client.warnings
+
+
+def test_export_comments_writes_json_and_downloads_media(tmp_path, monkeypatch):
+    import json
+
+    monkeypatch.setattr(module.utils, "getXbogus", lambda payload: payload)
+    session = CommentSession([
+        {
+            "status_code": 0, "total": 2, "has_more": 0, "cursor": 0,
+            "comments": [{
+                "cid": "50", "aweme_id": "999", "text": "主评论",
+                "reply_comment_total": 1,
+                "reply_comment": [
+                    {"cid": "51", "aweme_id": "999", "text": "回复内容"},
+                ],
+            }],
+        },
+    ])
+    client = module.CommentClient("ttwid=test", session=session, interval=0)
+    export, downloaded, failures = module.export_comments(
+        client, "999", tmp_path / "comments",
+        limit=50, reply_limit=20, include_replies=True, download_media=False,
+    )
+    assert (downloaded, failures) == (0, 0)
+    assert export["top_level_count"] == 1
+    assert export["reply_count"] == 1
+    assert export["limits"] == {
+        "top_level": 50, "per_reply_thread": 20, "include_replies": True,
+    }
+    saved = json.loads((tmp_path / "comments" / "comments.json").read_text(encoding="utf-8"))
+    saved_raw = json.loads((tmp_path / "comments" / "comments_raw.json").read_text(encoding="utf-8"))
+    assert len(saved["comments"]) == 2
+    assert len(saved_raw) == 2
+
+
+def test_download_aweme_exports_comments_into_work_folder_and_isolates_errors(tmp_path, monkeypatch):
+    import json
+    from apiproxy.douyin.download import Download
+
+    monkeypatch.setattr(module.utils, "getXbogus", lambda payload: payload)
+    session = CommentSession([
+        {
+            "status_code": 0, "total": 1, "has_more": 0, "cursor": 0,
+            "comments": [{"cid": "60", "aweme_id": "777", "text": "好拍"}],
+        },
+    ])
+    client = module.CommentClient("ttwid=test", session=session, interval=0)
+    dl = Download(
+        music=False, cover=False, avatar=False, resjson=False,
+        folderstyle=True, comment=True, comment_media=False, comment_client=client,
+    )
+    monkeypatch.setattr(dl, "_download_media_files", lambda *a, **kw: None)
+    aweme = {"aweme_id": "777", "create_time": "2026-11-19 10.00.00", "desc": "测试作品"}
+    assert dl.awemeDownload(aweme, tmp_path) is True
+
+    comment_json = tmp_path / "2026-11-19 10.00.00_测试作品" / "comments" / "comments.json"
+    assert comment_json.exists()
+    data = json.loads(comment_json.read_text(encoding="utf-8"))
+    assert data["top_level_count"] == 1
+    assert data["comments"][0]["text"] == "好拍"
+
+    # When folderstyle=False, comments use a per-work subfolder and errors do not fail the work.
+    failing_client = module.CommentClient("ttwid=test", session=CommentSession([]), interval=0)
+    monkeypatch.setattr(
+        failing_client, "crawl",
+        lambda *a, **kw: (_ for _ in ()).throw(module.CommentError("boom")),
+    )
+    dl_flat = Download(
+        music=False, cover=False, avatar=False, resjson=False,
+        folderstyle=False, comment=True, comment_media=False, comment_client=failing_client,
+    )
+    monkeypatch.setattr(dl_flat, "_download_media_files", lambda *a, **kw: None)
+    assert dl_flat.awemeDownload(aweme, tmp_path / "flat") is True
+
+
+def test_douyin_get_comment_info_delegates_with_global_cookie(monkeypatch):
+    from apiproxy.douyin import douyin_headers
+    from apiproxy.douyin.douyin import Douyin
+
+    captured = {}
+
+    class StubClient:
+        def __init__(self, cookie, interval=0.5):
+            captured["cookie"] = cookie
+            captured["interval"] = interval
+            self.reported_total = 1
+            self.warnings = []
+
+        def crawl(self, aweme_id, limit=100, reply_limit=100, include_replies=True):
+            captured["args"] = (aweme_id, limit, reply_limit, include_replies)
+            return ([{"cid": "80", "parent_cid": None, "text": "ok"}], [{"parent_cid": None, "comment": {"cid": "80"}}])
+
+    monkeypatch.setitem(douyin_headers, "Cookie", "ttwid=global_cookie")
+    monkeypatch.setattr("apiproxy.douyin.douyin.CommentClient", StubClient)
+    result = Douyin(database=False).getCommentInfo("888", limit=20, reply_limit=5, include_replies=False, interval=0.2)
+    assert captured["cookie"] == "ttwid=global_cookie"
+    assert captured["interval"] == 0.2
+    assert captured["args"] == ("888", 20, 5, False)
+    assert result["export"]["top_level_count"] == 1
+    assert result["export"]["limits"] == {
+        "top_level": 20, "per_reply_thread": 5, "include_replies": False,
+    }

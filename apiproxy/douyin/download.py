@@ -20,6 +20,7 @@ from rich.text import Text
 from rich import print as rprint
 
 from apiproxy.douyin import douyin_headers
+from apiproxy.douyin.comments import CommentClient, CommentError, export_comments
 from apiproxy.douyin.media import gallery_images, image_suffix, image_urls, live_photo_url
 from apiproxy.common import utils
 
@@ -27,13 +28,35 @@ logger = logging.getLogger("douyin_downloader")
 console = Console()
 
 class Download(object):
-    def __init__(self, thread=5, music=True, cover=True, avatar=True, resjson=True, folderstyle=True):
+    def __init__(
+        self,
+        thread=5,
+        music=True,
+        cover=True,
+        avatar=True,
+        resjson=True,
+        folderstyle=True,
+        comment=False,
+        comment_limit=100,
+        comment_reply_limit=100,
+        comment_replies=True,
+        comment_media=True,
+        comment_interval=0.5,
+        comment_client: Optional[CommentClient] = None,
+    ):
         self.thread = thread
         self.music = music
         self.cover = cover
         self.avatar = avatar
         self.resjson = resjson
         self.folderstyle = folderstyle
+        self.comment = comment
+        self.comment_limit = max(0, int(comment_limit))
+        self.comment_reply_limit = max(0, int(comment_reply_limit))
+        self.comment_replies = bool(comment_replies)
+        self.comment_media = bool(comment_media)
+        self.comment_interval = max(0.0, float(comment_interval))
+        self._comment_client = comment_client
         self.console = Console()
         self.progress = Progress(
             SpinnerColumn(),
@@ -154,11 +177,54 @@ class Download(object):
             # 下载媒体文件
             desc = file_name[:30]
             self._download_media_files(awemeDict, aweme_path, file_name, desc)
+
+            # 按需抓取作品评论区
+            if self.comment:
+                self._download_comments(awemeDict, aweme_path, file_name, desc)
             return True
                 
         except Exception as e:
             logger.error(f"处理作品时出错: {str(e)}")
             return False
+
+    def _get_comment_client(self) -> CommentClient:
+        if self._comment_client is None:
+            self._comment_client = CommentClient(
+                douyin_headers.get("Cookie", ""),
+                interval=self.comment_interval,
+            )
+        return self._comment_client
+
+    def _download_comments(self, aweme: dict, aweme_path: Path, name: str, desc: str) -> None:
+        """抓取并保存作品评论及评论媒体，失败时不影响主作品下载"""
+        aweme_id = str(aweme.get("aweme_id") or "").strip()
+        if not aweme_id:
+            logger.warning(f"作品缺少 aweme_id，跳过评论抓取: {desc}")
+            return
+
+        comment_dir = (aweme_path / "comments") if self.folderstyle else (aweme_path / f"{name}_comments")
+        try:
+            client = self._get_comment_client()
+            export, downloaded, failures = export_comments(
+                client,
+                aweme_id,
+                comment_dir,
+                source=f"https://www.douyin.com/video/{aweme_id}",
+                limit=self.comment_limit,
+                reply_limit=self.comment_reply_limit,
+                include_replies=self.comment_replies,
+                download_media=self.comment_media,
+            )
+            self.console.print(
+                f"[cyan]💬 评论已保存: {desc} "
+                f"(一级 {export['top_level_count']} 条, 回复 {export['reply_count']} 条, "
+                f"媒体 {downloaded} 个, 失败 {failures} 个)[/]"
+            )
+            for warning in export.get("warnings") or []:
+                logger.warning(f"[评论提示]{desc}: {warning}")
+        except (OSError, ValueError, CommentError) as e:
+            logger.warning(f"评论抓取失败 {desc} ({aweme_id}): {e}")
+            self.console.print(f"[yellow]⚠️  评论抓取失败: {desc} ({e})[/]")
 
     def _save_json(self, path: Path, data: dict) -> None:
         """保存JSON数据"""

@@ -16,6 +16,14 @@ music: true   # 下载音乐
 cover: true   # 下载封面
 json: true    # 保存元数据JSON
 
+# 评论区抓取选项（可选，默认关闭）
+comment: false           # 是否顺带抓取作品评论区
+comment_limit: 100       # 一级评论上限，0 表示全部
+comment_reply_limit: 100 # 每条评论回复上限，0 表示全部
+comment_replies: true    # 是否抓取评论回复
+comment_media: true      # 是否下载评论中的图片/表情包等媒体
+comment_interval: 0.5    # 评论接口请求最小间隔（秒）
+
 # 时间过滤（可选，留空表示不过滤）。格式：YYYY-MM-DD
 start_time: ""
 end_time: ""
