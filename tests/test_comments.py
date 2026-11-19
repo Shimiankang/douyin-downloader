@@ -153,3 +153,96 @@ def test_download_media_keeps_animated_format(tmp_path):
     assert item["local_path"].endswith(".gif")
     assert item["animated"] is True
     assert (tmp_path / item["local_path"]).read_bytes().startswith(b"GIF89a")
+
+
+class EmptyBodyResponse:
+    status_code = 200
+    text = ""
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        import json
+        return json.loads(self.text)
+
+
+def test_reuses_complete_embedded_replies_without_calling_reply_api(monkeypatch):
+    monkeypatch.setattr(module.utils, "getXbogus", lambda payload: payload)
+    session = CommentSession([
+        {
+            "status_code": 0, "total": 3, "has_more": 0, "cursor": 0,
+            "comments": [{
+                "cid": "10", "aweme_id": "123", "text": "主评论",
+                "reply_comment_total": 2,
+                "reply_comment": [
+                    {"cid": "11", "aweme_id": "123", "text": "回复1"},
+                    {"cid": "12", "aweme_id": "123", "text": "回复2", "reply_to_reply_id": "11"},
+                ],
+            }],
+        },
+    ])
+    client = module.CommentClient("ttwid=test", session=session, interval=0)
+    comments, raw = client.crawl("123", limit=10, reply_limit=10)
+    assert [item["cid"] for item in comments] == ["10", "11", "12"]
+    assert comments[1]["parent_cid"] == "10"
+    assert comments[2]["reply_to_cid"] == "11"
+    assert len(raw) == 3
+    assert len(session.calls) == 1
+    assert not client.warnings
+
+
+def test_falls_back_to_embedded_replies_when_reply_api_returns_empty_body(monkeypatch):
+    monkeypatch.setattr(module.utils, "getXbogus", lambda payload: payload)
+
+    class FallbackSession:
+        def __init__(self):
+            self.calls = []
+
+        def get(self, url, **kwargs):
+            self.calls.append((url, kwargs))
+            if "/comment/list/reply/" in url:
+                return EmptyBodyResponse()
+            return JsonResponse({
+                "status_code": 0, "total": 4, "has_more": 0, "cursor": 0,
+                "comments": [{
+                    "cid": "20", "aweme_id": "123", "text": "主评论",
+                    "reply_comment_total": 3,
+                    "reply_comment": [
+                        {"cid": "21", "aweme_id": "123", "text": "内嵌回复"},
+                    ],
+                }],
+            })
+
+    session = FallbackSession()
+    client = module.CommentClient("ttwid=test", session=session, interval=0)
+    comments, raw = client.crawl("123", limit=10, reply_limit=10)
+    assert [item["cid"] for item in comments] == ["20", "21"]
+    assert comments[1]["parent_cid"] == "20"
+    assert len(raw) == 2
+    assert len(session.calls) == 2
+    assert len(client.warnings) == 1
+    assert "空响应" in client.warnings[0]
+    assert "1/3" in client.warnings[0]
+
+
+def test_embedded_replies_respect_reply_limit(monkeypatch):
+    monkeypatch.setattr(module.utils, "getXbogus", lambda payload: payload)
+    session = CommentSession([
+        {
+            "status_code": 0, "total": 6, "has_more": 0, "cursor": 0,
+            "comments": [{
+                "cid": "30", "aweme_id": "123", "text": "主评论",
+                "reply_comment_total": 5,
+                "reply_comment": [
+                    {"cid": "31", "aweme_id": "123", "text": "回复1"},
+                    {"cid": "32", "aweme_id": "123", "text": "回复2"},
+                ],
+            }],
+        },
+    ])
+    client = module.CommentClient("ttwid=test", session=session, interval=0)
+    comments, _ = client.crawl("123", limit=10, reply_limit=1)
+    assert [item["cid"] for item in comments] == ["30", "31"]
+    assert len(session.calls) == 1
+    assert not client.warnings

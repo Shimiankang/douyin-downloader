@@ -222,6 +222,7 @@ class CommentClient:
         if self._last_request:
             time.sleep(max(0.0, self.interval - (time.monotonic() - self._last_request)))
         signed = utils.getXbogus(urlencode(params))
+        response = None
         try:
             response = self.session.get(
                 endpoint + signed, headers=self.headers, timeout=self.timeout
@@ -231,7 +232,12 @@ class CommentClient:
                 raise CommentError(f"评论接口 HTTP {response.status_code}")
             response.raise_for_status()
             payload = response.json()
-        except (requests.RequestException, ValueError) as exc:
+        except ValueError as exc:
+            body = getattr(response, "text", None)
+            if isinstance(body, str) and not body.strip():
+                raise CommentError("评论接口返回空响应（可能触发风控限制）") from exc
+            raise CommentError(f"评论接口请求失败：{type(exc).__name__}") from exc
+        except requests.RequestException as exc:
             raise CommentError(f"评论接口请求失败：{type(exc).__name__}") from exc
         if not isinstance(payload, dict):
             raise CommentError("评论接口未返回 JSON 对象")
@@ -305,6 +311,57 @@ class CommentClient:
                     lookup[emoji["display_name"]] = urls
         return lookup
 
+    @staticmethod
+    def _embedded_replies(comment: dict) -> list[dict]:
+        """Extract replies already embedded in a top-level comment payload."""
+        raw_replies = comment.get("reply_comment")
+        if not isinstance(raw_replies, list):
+            return []
+        replies: list[dict] = []
+        seen_cids: set[str] = set()
+        for item in raw_replies:
+            if not isinstance(item, dict):
+                continue
+            cid = str(item.get("cid") or "")
+            if cid and cid in seen_cids:
+                continue
+            if cid:
+                seen_cids.add(cid)
+            replies.append(item)
+        return replies
+
+    def _fetch_replies(
+        self, aweme_id: str, comment: dict, cid: str, reply_limit: int,
+    ) -> list[dict]:
+        """Return replies for one top-level comment, reusing embedded replies when complete or on API failure."""
+        reply_total = int(comment.get("reply_comment_total") or 0)
+        embedded = self._embedded_replies(comment)
+        if not reply_total and not embedded:
+            return []
+
+        if embedded and (
+            (reply_total and len(embedded) >= reply_total)
+            or (reply_limit and len(embedded) >= reply_limit)
+            or not reply_total
+        ):
+            return embedded[:reply_limit] if reply_limit else embedded
+
+        try:
+            fetched = list(self._iter_comments(aweme_id, cid, reply_limit))
+        except CommentError as exc:
+            if embedded:
+                kept = embedded[:reply_limit] if reply_limit else embedded
+                self.warnings.append(
+                    f"评论 {cid} 的回复接口获取失败（{exc}），已降级保留一级评论附带的 {len(kept)}/{reply_total} 条回复"
+                )
+                return kept
+            self.warnings.append(f"评论 {cid} 的回复获取失败：{exc}")
+            return []
+
+        if not fetched and embedded:
+            return embedded[:reply_limit] if reply_limit else embedded
+        return fetched
+
     def crawl(
         self, aweme_id: str, limit: int = 100, reply_limit: int = 100,
         include_replies: bool = True,
@@ -318,13 +375,8 @@ class CommentClient:
             cid = str(comment.get("cid") or "")
             raw.append({"parent_cid": None, "comment": comment})
             entries.append((comment, None))
-            if include_replies and cid and comment.get("reply_comment_total", 0):
-                try:
-                    replies = list(self._iter_comments(aweme_id, cid, reply_limit))
-                except CommentError as exc:
-                    self.warnings.append(f"评论 {cid} 的回复获取失败：{exc}")
-                    replies = []
-                for reply in replies:
+            if include_replies and cid:
+                for reply in self._fetch_replies(aweme_id, comment, cid, reply_limit):
                     raw.append({"parent_cid": cid, "comment": reply})
                     entries.append((reply, cid))
         lookup = self.emoji_lookup() if any(
